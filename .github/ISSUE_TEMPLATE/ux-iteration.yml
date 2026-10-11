@@ -1,0 +1,45 @@
+name: UX iteration / 体验迭代
+description: Agree the reference, user flow, ownership and acceptance before implementation.
+title: '[UX] '
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: User outcome / 用户目标
+      description: Describe the complete user journey and the current problem.
+      placeholder: 'From opening inventory to reviewing and saving an item…'
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: Selected reference / 已选参考
+      description: Exact screen or flow URL, screenshots, viewport, and which visual details to reproduce. Explain N/A for nonvisual work.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope / 本轮范围
+      description: Include in-scope screens, interactions, motion, and explicit exclusions.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance / 验收标准
+      description: Write observable steps, including loading, failure, retry and completion. Keep live API verification separate from sample previews.
+    validations:
+      required: true
+  - type: textarea
+    id: owners
+    attributes:
+      label: Owners and next step / 负责人和下一步
+      placeholder: 'Implementation: @…; UX review: @…; integration review: @…; next step: …'
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies / 依赖与阻塞
+      description: Account permissions, API readiness, related issues and device needs. Never paste secrets.
