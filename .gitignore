@@ -1,0 +1,22 @@
+# Node
+node_modules/
+dist/
+*.log
+
+# SQLite databases (including WAL sidecars)
+*.db
+*.db-wal
+*.db-shm
+
+# Environment
+.env
+.env.local
+
+# Xcode / XcodeGen
+ios/*.xcodeproj/
+ios/*.xcworkspace/
+ios/Generated/
+xcuserdata/
+*.xcuserstate
+.DS_Store
+build/

@@ -1,0 +1,71 @@
+# XcodeGen spec — `cd ios && xcodegen generate && open InventoryApp.xcodeproj`
+#
+# The project file is generated rather than committed: a .pbxproj is a merge
+# hazard and cannot be reviewed meaningfully. If you would rather not install
+# XcodeGen, see ios/README.md for the manual Xcode setup.
+name: InventoryApp
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    SWIFT_STRICT_CONCURRENCY: complete
+
+targets:
+  InventoryApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.InventoryApp
+        # Override at build time to point the app at a deployed API:
+        #   xcodebuild ... INVENTORY_API_BASE_URL=https://api.example.com
+        INVENTORY_API_BASE_URL: http://localhost:3000
+    info:
+      path: Generated/Info.plist
+      properties:
+        CFBundleDisplayName: Inventory
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # Read at runtime by APIConfiguration.
+        InventoryApiBaseUrl: $(INVENTORY_API_BASE_URL)
+        # The simulator talks to the API over plaintext http on localhost.
+        # Scoped to localhost only — not a blanket ATS exemption. A real
+        # deployment uses https and needs none of this.
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: true
+
+  InventoryAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: InventoryApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.InventoryAppTests
+
+schemes:
+  InventoryApp:
+    build:
+      targets:
+        InventoryApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - InventoryAppTests
