@@ -56,6 +56,7 @@ on), a `name`, and a non-negative `quantity`.
 | `PUT`    | `/v1/items/:id/photo`   | raw image body → metadata; replaces any existing photo |
 | `GET`    | `/v1/items/:id/photo`   | the image bytes, with `ETag`/`304` revalidation        |
 | `DELETE` | `/v1/items/:id/photo`   | `204`                                                  |
+| `POST`   | `/v1/items/:id/valuation` | identifies the photo and estimates its resale value  |
 
 `PATCH` **sets** a count; `adjust` **moves** it. The second is what the app's
 `+`/`−` buttons use: it is applied under the write lock, so two concurrent
@@ -78,6 +79,9 @@ Every non-2xx response has one shape, so a client codes against one contract:
 | 404    | `item_not_found`, `route_not_found`, `photo_not_found` |
 | 409    | `sku_already_exists`                       |
 | 413    | `photo_too_large`                          |
+| 502    | `valuation_upstream_failed`, `valuation_unreadable` |
+| 503    | `valuation_not_configured`                 |
+| 504    | `valuation_timeout`                        |
 | 415    | `unsupported_image_type`                   |
 | 422    | `insufficient_stock`                       |
 | 500    | `internal_error`                           |
@@ -126,10 +130,49 @@ The iOS client re-draws each capture to bake in EXIF orientation and scales it
 to 2048 px before JPEG encoding — a full-resolution iPhone capture is several
 times the size limit.
 
+## Valuation
+
+`POST /v1/items/:id/valuation` sends the item's stored photo to Gemini with
+web-search grounding and returns what it is and what it is worth:
+
+```jsonc
+{ "itemId": "…", "name": "Cordless Drill",
+  "price": { "amount": 45.5, "currency": "USD" },
+  "sources": [{ "uri": "https://…", "title": "Drill listing" }],
+  "model": "gemini-2.5-flash", "valuedAt": "2026-10-11T…" }
+```
+
+`POST`, not `GET`: it calls a paid upstream service and is neither cacheable
+nor idempotent. A photo-less item returns `404` **without** calling upstream.
+
+**`price` can be `null`, and that is a real answer** — the documented outcome
+for a photo that cannot be valued. A guessed number would be worse than none,
+so the model is told to return null and a reply that does not conform is an
+error rather than a fallback.
+
+**Why Gemini and not a vision API.** Cloud Vision labels an image; it does not
+price one. Pricing needs current comparable listings, which means search
+grounding in the same call — so `sources` are taken from the service's own
+grounding metadata rather than from URLs the model wrote into its reply.
+
+**The reply is validated, never trusted.** Zod checks the shape, the amount
+(finite, positive, ≤ 2dp) and that the currency equals `VALUATION_CURRENCY`;
+sources are filtered to `https:`, de-duplicated and capped at five. Errors
+never echo the upstream body, the request, or the key.
+
+**Configuration is optional.** Without `GEMINI_API_KEY` the server boots and
+the route returns a typed `503` — explicit, rather than a masked degradation.
+The key belongs in `api/.env` (gitignored) and nowhere else.
+
+> **Not verified against the live API.** Every valuation test runs against a
+> stubbed `fetch`. The request matches the published schema field-for-field,
+> but no real round-trip has been proven from this repo. Make one live call
+> with a real key before trusting it.
+
 ## Testing
 
 ```bash
-cd api && npm test          # 44 tests
+cd api && npm test          # 67 tests
 cd ios  && xcodebuild test -scheme InventoryApp \
             -destination 'platform=iOS Simulator,name=iPhone 15'
 ```

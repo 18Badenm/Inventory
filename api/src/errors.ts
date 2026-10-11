@@ -13,6 +13,10 @@ export type ErrorCode =
   | 'sku_already_exists'
   | 'insufficient_stock'
   | 'photo_not_found'
+  | 'valuation_not_configured'
+  | 'valuation_upstream_failed'
+  | 'valuation_unreadable'
+  | 'valuation_timeout'
   | 'unsupported_image_type'
   | 'photo_too_large'
   | 'internal_error';
@@ -106,5 +110,48 @@ export class InsufficientStockError extends AppError {
     );
     this.available = available;
     this.requested = requested;
+  }
+}
+
+/**
+ * Valuation failures.
+ *
+ * None of these carry the upstream response body, the outgoing request, or
+ * the API key: an error surfaced to a client must not become a channel for
+ * leaking credentials or third-party payloads.
+ */
+export class ValuationNotConfiguredError extends AppError {
+  readonly code = 'valuation_not_configured';
+  readonly statusCode = 503;
+
+  constructor() {
+    super('Valuation is not configured on this server.');
+  }
+}
+
+export class ValuationUpstreamError extends AppError {
+  readonly code = 'valuation_upstream_failed';
+  readonly statusCode = 502;
+
+  constructor() {
+    super('The valuation service could not be reached.');
+  }
+}
+
+export class ValuationUnreadableError extends AppError {
+  readonly code = 'valuation_unreadable';
+  readonly statusCode = 502;
+
+  constructor() {
+    super('The valuation service returned something unusable.');
+  }
+}
+
+export class ValuationTimeoutError extends AppError {
+  readonly code = 'valuation_timeout';
+  readonly statusCode = 504;
+
+  constructor() {
+    super('The valuation service took too long to respond.');
   }
 }

@@ -1,6 +1,7 @@
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { openDatabase } from './db.js';
+import { GeminiValuator } from './valuation/gemini.js';
 
 /**
  * Process entry point: load config, open storage, serve, and shut down
@@ -9,7 +10,22 @@ import { openDatabase } from './db.js';
 async function main(): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.DATABASE_PATH);
-  const app = buildApp({ db, logLevel: config.LOG_LEVEL });
+  // Without a key the service still boots; the valuation route reports 503.
+  const valuator =
+    config.GEMINI_API_KEY === undefined
+      ? null
+      : new GeminiValuator({
+          apiKey: config.GEMINI_API_KEY,
+          model: config.GEMINI_MODEL,
+          timeoutMs: config.GEMINI_TIMEOUT_MS,
+          currency: config.VALUATION_CURRENCY,
+        });
+
+  const app = buildApp({ db, logLevel: config.LOG_LEVEL, valuator });
+
+  if (valuator === null) {
+    app.log.warn('GEMINI_API_KEY is not set — valuation will return 503');
+  }
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');

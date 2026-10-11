@@ -431,4 +431,8 @@ final class FailUploadStub: InventoryService, @unchecked Sendable {
     func deletePhoto(id: UUID) async throws {
         try await inner.deletePhoto(id: id)
     }
+
+    func valuate(id: UUID) async throws -> Valuation {
+        try await inner.valuate(id: id)
+    }
 }

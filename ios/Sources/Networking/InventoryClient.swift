@@ -180,6 +180,15 @@ actor InventoryClient: InventoryService {
         )
     }
 
+    func valuate(id: UUID) async throws -> Valuation {
+        try await send(
+            method: "POST",
+            path: "/v1/items/\(id.apiIdentifier)/valuation",
+            body: Optional<NoBody>.none,
+            expecting: Valuation.self
+        )
+    }
+
     // MARK: - Transport
 
     private func send<Body: Encodable, Response: Decodable>(

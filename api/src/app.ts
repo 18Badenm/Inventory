@@ -10,11 +10,14 @@ import {
 } from './errors.js';
 import { MAX_PHOTO_BYTES, SUPPORTED_IMAGE_TYPES } from './items/image.js';
 import { ItemRepository } from './items/repository.js';
+import type { ItemValuator } from './valuation/gemini.js';
 import { registerItemRoutes } from './items/routes.js';
 
 export interface AppOptions {
   readonly db: Database;
   readonly logLevel: Config['LOG_LEVEL'];
+  /** `null` when no API key is configured; the route then returns 503. */
+  readonly valuator?: ItemValuator | null;
 }
 
 /**
@@ -72,7 +75,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     reply.code(200).send({ status: 'ok' }),
   );
 
-  registerItemRoutes(app, repository);
+  registerItemRoutes(app, repository, options.valuator ?? null);
 
   app.setNotFoundHandler((request, reply) => {
     const body: ErrorBody = {

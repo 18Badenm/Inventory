@@ -15,6 +15,7 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
         case uploadPhoto(id: UUID, byteCount: Int)
         case photo(UUID)
         case deletePhoto(UUID)
+        case valuate(UUID)
     }
 
     private let lock = NSLock()
@@ -22,6 +23,7 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
     private var _items: [Item]
     private var _failure: APIError?
     private var _photos: [UUID: Data] = [:]
+    private var _valuation: Valuation?
 
     init(items: [Item] = [], failure: APIError? = nil) {
         _items = items
@@ -36,6 +38,10 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
 
     func storedPhoto(for itemId: UUID) -> Data? {
         lock.withLock { _photos[itemId] }
+    }
+
+    func setValuation(_ valuation: Valuation) {
+        lock.withLock { _valuation = valuation }
     }
 
     var calls: [Call] {
@@ -214,6 +220,21 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
                 )
             }
             return data
+        }
+    }
+
+    func valuate(id: UUID) async throws -> Valuation {
+        try record(.valuate(id))
+
+        return try lock.withLock {
+            guard let _valuation else {
+                throw APIError.api(
+                    status: 502,
+                    code: "valuation_unreadable",
+                    message: "No stubbed valuation"
+                )
+            }
+            return _valuation
         }
     }
 

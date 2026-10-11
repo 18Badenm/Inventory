@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { z, ZodError, ZodTypeAny } from 'zod';
 import {
   PhotoTooLargeError,
+  ValuationNotConfiguredError,
   UnsupportedImageTypeError,
   ValidationError,
 } from '../errors.js';
@@ -11,6 +12,7 @@ import {
   SUPPORTED_IMAGE_TYPES,
 } from './image.js';
 import type { ItemRepository } from './repository.js';
+import type { ItemValuator } from '../valuation/gemini.js';
 import {
   adjustStockSchema,
   createItemSchema,
@@ -50,6 +52,7 @@ interface IdParams {
 export function registerItemRoutes(
   app: FastifyInstance,
   repository: ItemRepository,
+  valuator: ItemValuator | null,
 ): void {
   app.get(
     '/v1/items',
@@ -177,6 +180,31 @@ export function registerItemRoutes(
       const id = parse(itemIdSchema, request.params.id);
       repository.deletePhoto(id);
       return reply.code(204).send();
+    },
+  );
+
+  /**
+   * Values the item from its stored photo. POST rather than GET: it calls a
+   * paid upstream service and is not cacheable or idempotent.
+   *
+   * `getPhoto` already raises ItemNotFoundError and PhotoNotFoundError, so
+   * there is no not-found logic duplicated here.
+   */
+  app.post(
+    '/v1/items/:id/valuation',
+    async (
+      request: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ): Promise<FastifyReply> => {
+      const id = parse(itemIdSchema, request.params.id);
+
+      if (valuator === null) {
+        throw new ValuationNotConfiguredError();
+      }
+
+      const photo = repository.getPhoto(id);
+
+      return reply.code(200).send(await valuator.valuate(photo));
     },
   );
 

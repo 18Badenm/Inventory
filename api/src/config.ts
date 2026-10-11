@@ -13,6 +13,17 @@ const configSchema = z.object({
   LOG_LEVEL: z
     .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
     .default('info'),
+
+  // Valuation is optional: without a key the service still boots and the
+  // endpoint returns a typed 503, which is explicit rather than a masked
+  // degradation.
+  GEMINI_API_KEY: z.string().min(1).optional(),
+  GEMINI_MODEL: z.string().min(1).default('gemini-2.5-flash'),
+  GEMINI_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(20_000),
+  VALUATION_CURRENCY: z
+    .string()
+    .regex(/^[A-Z]{3}$/, 'Currency must be a three-letter ISO code')
+    .default('USD'),
 });
 
 export type Config = z.infer<typeof configSchema>;

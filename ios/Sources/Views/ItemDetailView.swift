@@ -11,6 +11,7 @@ struct ItemDetailView: View {
     @State private var adjustmentSize = 1
 
     @StateObject private var photo: ItemPhotoViewModel
+    @StateObject private var valuation: ItemValuationViewModel
 
     private let service: InventoryService
     private let onChange: (Item) -> Void
@@ -20,6 +21,9 @@ struct ItemDetailView: View {
         _name = State(initialValue: item.name)
         _photo = StateObject(
             wrappedValue: ItemPhotoViewModel(itemId: item.id, service: service)
+        )
+        _valuation = StateObject(
+            wrappedValue: ItemValuationViewModel(itemId: item.id, service: service)
         )
         self.service = service
         self.onChange = onChange
@@ -79,6 +83,10 @@ struct ItemDetailView: View {
 
             Section("Photo") {
                 photoSection
+            }
+
+            Section("Value") {
+                valuationSection
             }
 
             Section("History") {
@@ -186,6 +194,70 @@ struct ItemDetailView: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    @ViewBuilder
+    private var valuationSection: some View {
+        switch valuation.state {
+        case .idle:
+            valuationButton(title: "What's it worth?")
+
+        case .loading:
+            HStack(spacing: 10) {
+                ProgressView()
+                Text("Checking recent listings…")
+                    .foregroundStyle(.secondary)
+            }
+
+        case let .loaded(result):
+            VStack(alignment: .leading, spacing: 6) {
+                Text(result.name)
+                    .font(.headline)
+
+                if let price = result.price {
+                    Text(price.formatted)
+                        .font(.title2.weight(.semibold).monospacedDigit())
+                } else {
+                    // A missing price is a real answer from the model, so it
+                    // is stated plainly rather than shown as an error.
+                    Text("No reliable value found")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Estimated by \(result.model)")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 2)
+
+            ForEach(result.sources) { source in
+                Link(destination: source.uri) {
+                    Label(source.displayTitle, systemImage: "link")
+                        .font(.footnote)
+                        .lineLimit(1)
+                }
+            }
+
+            valuationButton(title: "Re-estimate")
+
+        case let .failed(message):
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            valuationButton(title: "Try again")
+        }
+    }
+
+    private func valuationButton(title: String) -> some View {
+        Button {
+            Task { await valuation.valuate() }
+        } label: {
+            Label(title, systemImage: "sparkle.magnifyingglass")
+        }
+        // Valuation reads the stored photo, so there is nothing to value
+        // until one exists.
+        .disabled(!item.hasPhoto || valuation.isLoading)
     }
 
     private func rename() async {

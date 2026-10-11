@@ -24,4 +24,10 @@ protocol InventoryService: Sendable {
     func photo(id: UUID) async throws -> Data
 
     func deletePhoto(id: UUID) async throws
+
+    /// Estimates what the item's photo shows and what it is worth.
+    ///
+    /// Calls a paid upstream service, so it is only ever triggered by an
+    /// explicit tap — never on appear.
+    func valuate(id: UUID) async throws -> Valuation
 }

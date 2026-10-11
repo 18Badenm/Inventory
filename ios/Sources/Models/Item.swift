@@ -48,3 +48,34 @@ struct UpdateItemRequest: Encodable, Sendable {
 struct AdjustStockRequest: Encodable, Sendable {
     let delta: Int
 }
+
+/// A money amount in the server's configured currency.
+struct Price: Decodable, Sendable, Equatable {
+    let amount: Double
+    let currency: String
+
+    /// Localised for display, e.g. "$45.50".
+    var formatted: String {
+        amount.formatted(.currency(code: currency))
+    }
+}
+
+/// A listing the estimate was grounded in.
+struct ValuationSource: Decodable, Sendable, Equatable, Identifiable {
+    let uri: URL
+    let title: String?
+
+    var id: URL { uri }
+    var displayTitle: String { title ?? uri.host() ?? uri.absoluteString }
+}
+
+/// What the server thinks a photographed item is, and what it is worth.
+struct Valuation: Decodable, Sendable, Equatable {
+    let itemId: UUID
+    let name: String
+    /// `nil` when no value could be determined — a real answer, not a failure.
+    let price: Price?
+    let sources: [ValuationSource]
+    let model: String
+    let valuedAt: Date
+}

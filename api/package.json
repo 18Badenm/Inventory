@@ -1,7 +1,7 @@
 {
   "name": "inventory-api",
   "version": "1.0.0",
-  "description": "Inventory API — REST service for tracking stock items.",
+  "description": "Inventory API \u2014 REST service for tracking stock items.",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,7 +15,8 @@
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "test": "node --import tsx --test test/**/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "pretest": "npm run typecheck"
   },
   "dependencies": {
     "better-sqlite3": "^11.10.0",
