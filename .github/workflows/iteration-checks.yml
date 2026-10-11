@@ -1,0 +1,114 @@
+name: Iteration checks
+
+on:
+  pull_request:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: iteration-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  ios:
+    name: iOS checks
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare XcodeGen
+        run: |
+          if ! command -v xcodegen >/dev/null; then
+            brew install xcodegen
+          fi
+          xcodebuild -version
+          xcodegen --version
+      - name: Generate project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Select an available iPhone simulator
+        run: |
+          xcrun simctl list devices available --json > "$RUNNER_TEMP/simulators.json"
+          python3 scripts/ci/select_simulator.py "$RUNNER_TEMP/simulators.json" >> "$GITHUB_ENV"
+      - name: Build and test
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild test \
+            -project InventoryApp.xcodeproj \
+            -scheme InventoryApp \
+            -destination "platform=iOS Simulator,id=$INVENTORY_SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/inventory-derived" \
+            -resultBundlePath "$RUNNER_TEMP/InventoryTests.xcresult" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/inventory-ios-tests.log"
+      - name: Keep simulator test evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: ios-tests-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/InventoryTests.xcresult
+            ${{ runner.temp }}/inventory-ios-tests.log
+          if-no-files-found: warn
+          retention-days: 30
+
+  record:
+    name: Iteration record
+    if: always()
+    needs: [api, ios]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check workflow helpers
+        run: python3 -m unittest discover -s scripts/ci -p 'test_*.py'
+      - name: Record tested revision and outcomes
+        env:
+          API_RESULT: ${{ needs.api.result }}
+          IOS_RESULT: ${{ needs.ios.result }}
+          INVENTORY_RECORD_DIR: ${{ runner.temp }}/inventory-iteration
+        run: python3 scripts/ci/write_iteration_summary.py
+      - name: Keep iteration handoff
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: iteration-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/inventory-iteration/
+            docs/iterations/
+          if-no-files-found: error
+          retention-days: 30
+      - name: Preserve failed or cancelled check status
+        env:
+          API_RESULT: ${{ needs.api.result }}
+          IOS_RESULT: ${{ needs.ios.result }}
+        run: test "$API_RESULT" = success && test "$IOS_RESULT" = success

@@ -1,5 +1,12 @@
 # Inventory
 
+## Team workflow
+
+For each UX iteration, use an Issue, a small branch and one PR with visual evidence.
+Every pushed revision runs API/iOS checks and produces a review receipt. See
+[contributing](CONTRIBUTING.md), [the team workflow](docs/TEAM_WORKFLOW.md), and
+[iteration history](docs/iterations/README.md). CI success and UX acceptance are recorded separately.
+
 A stock-tracking app in two parts:
 
 | Path  | What it is                                                     |
