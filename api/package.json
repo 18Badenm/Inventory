@@ -5,10 +5,13 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.6.0"
+    "node": ">=20.6.0"
   },
   "scripts": {
     "build": "tsc",
+    "clean": "rm -rf dist",
+    "// prestart": "dist/ is not committed, so a fresh clone must compile before it can start; npm runs this automatically.",
+    "prestart": "npm run build",
     "start": "node dist/server.js",
     "dev": "tsx watch src/server.ts",
     "test": "node --import tsx --test test/**/*.test.ts",
