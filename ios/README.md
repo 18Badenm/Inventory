@@ -49,7 +49,12 @@ defaulting to another host.
 ## Screens
 
 - **List** — searchable, paged, pull-to-refresh; `+`/`−` adjust stock inline,
-  swipe to delete. Zero-stock counts are shown in orange.
+  swipe to delete. Zero-stock counts are shown in orange. The **camera button
+  in the navigation bar** is the fastest path in: capture a photo and it
+  creates an item (SKU `PHOTO-<timestamp>-<suffix>`, quantity 1) with the
+  image already attached, at the top of the list. Rename it from the detail
+  screen. If the upload fails the item is still created, so the capture is not
+  silently lost.
 - **Detail** — rename, set an absolute count, move stock by a chosen step, and
   take/retake/remove the item's photo.
 - **Add** — SKU/name/quantity, validated locally against the same rules the

@@ -110,8 +110,10 @@ with no network and no running backend.
 **No optimistic UI for stock.** An adjustment the server would refuse must not
 briefly display a wrong count, so the server's copy of the row always wins.
 
-**Photos: one per item, sniffed not trusted.** The camera lives on an item's
-detail screen, so a photo always belongs to the item it depicts. The image is
+**Photos: one per item, sniffed not trusted.** There are two ways in: the
+camera button on the list screen, which creates an item from a capture, and
+the photo section of an item's detail screen, which attaches to an existing
+one. Either way a photo always belongs to the item it depicts. The image is
 sent as a raw `image/*` body — one file, no fields, so multipart would buy
 nothing — and the stored media type comes from the file's **magic bytes**, never
 the client's `Content-Type` header. A payload claiming `image/jpeg` that is

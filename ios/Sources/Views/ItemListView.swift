@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// The root screen: searchable, pull-to-refresh list of stock with inline
 /// increment/decrement and swipe-to-delete.
@@ -19,6 +20,14 @@ struct ItemListView: View {
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Button {
+                            Task { await viewModel.beginCapture() }
+                        } label: {
+                            Label("Take photo", systemImage: "camera")
+                        }
+                        .disabled(viewModel.isCapturing)
+                    }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
                             isAddingItem = true
                         } label: {
                             Label("Add item", systemImage: "plus")
@@ -31,6 +40,31 @@ struct ItemListView: View {
                 }
                 .refreshable { await viewModel.load() }
                 .task { await viewModel.load() }
+                .sheet(item: $viewModel.captureSource) { source in
+                    CameraPicker(source: source) { captured in
+                        Task { await viewModel.createFromPhoto(captured) }
+                    }
+                }
+                .alert("Camera access needed", isPresented: $viewModel.needsCameraSettings) {
+                    Button("Open Settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    Button("Not now", role: .cancel) {}
+                } message: {
+                    Text(
+                        "Allow camera access for Inventory to photograph items. "
+                            + "You can change it under Settings › Inventory › Camera."
+                    )
+                }
+                .overlay {
+                    if viewModel.isCapturing {
+                        ProgressView("Uploading photo…")
+                            .padding()
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }
                 .sheet(isPresented: $isAddingItem) {
                     AddItemView(service: service) { created in
                         viewModel.insert(created)
@@ -71,7 +105,7 @@ struct ItemListView: View {
                 .font(.headline)
             Text(
                 viewModel.searchText.isEmpty
-                    ? "Tap + to add your first item."
+                    ? "Tap the camera to photograph an item, or + to type one in."
                     : "Try a different SKU or name."
             )
             .foregroundStyle(.secondary)

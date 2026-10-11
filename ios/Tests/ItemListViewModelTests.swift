@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 @testable import InventoryApp
 
@@ -252,5 +253,182 @@ final class APIErrorTests: XCTestCase {
             decoding.errorDescription,
             "The server sent a response the app didn't understand."
         )
+    }
+}
+
+@MainActor
+final class ListCaptureTests: XCTestCase {
+    private func sampleImage(
+        size: CGSize = CGSize(width: 8, height: 8)
+    ) -> UIImage {
+        UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.systemIndigo.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+        }
+    }
+
+    private let fixedDate = Date(timeIntervalSince1970: 1_760_000_000)
+
+    func testGeneratedSKUMatchesWhatTheAPIAccepts() {
+        let sku = ItemListViewModel.generatedSKU(at: fixedDate)
+
+        XCTAssertTrue(sku.hasPrefix("PHOTO-"))
+        XCTAssertLessThanOrEqual(sku.count, 64)
+        XCTAssertTrue(
+            sku.allSatisfy { $0.isASCII && ($0.isNumber || ("A"..."Z").contains($0) || $0 == "-") },
+            "the API rejects anything but A-Z, 0-9 and dashes; got \(sku)"
+        )
+    }
+
+    func testTwoCapturesInTheSameSecondGetDistinctSKUs() {
+        let first = ItemListViewModel.generatedSKU(at: fixedDate)
+        let second = ItemListViewModel.generatedSKU(at: fixedDate)
+
+        XCTAssertNotEqual(
+            first,
+            second,
+            "the SKU is unique server-side, so identical timestamps must not collide"
+        )
+    }
+
+    func testCaptureCreatesAnItemUploadsThePhotoAndShowsItFirst() async {
+        let existing = Item.fixture(sku: "OLD-1")
+        let service = StubInventoryService(items: [existing])
+        let viewModel = ItemListViewModel(
+            service: service,
+            authorizer: StubCameraAuthorizer(.granted),
+            clock: { self.fixedDate }
+        )
+        await viewModel.load()
+
+        await viewModel.createFromPhoto(sampleImage())
+
+        XCTAssertEqual(viewModel.items.count, 2)
+        XCTAssertTrue(
+            viewModel.items[0].sku.hasPrefix("PHOTO-"),
+            "the new capture is at the top of the list"
+        )
+        XCTAssertEqual(
+            viewModel.items[0].hasPhoto,
+            true,
+            "the row reflects that the photo was stored"
+        )
+        XCTAssertEqual(viewModel.items[1].sku, "OLD-1")
+        XCTAssertEqual(viewModel.total, 2)
+        XCTAssertNil(viewModel.errorMessage)
+        XCTAssertFalse(viewModel.isCapturing)
+
+        // The photo actually reached the service, as real JPEG bytes.
+        let newId = viewModel.items[0].id
+        let stored = service.storedPhoto(for: newId)
+        XCTAssertNotNil(stored)
+        XCTAssertEqual(Array((stored ?? Data()).prefix(3)), [0xFF, 0xD8, 0xFF])
+
+        // Create, then upload, then re-read for the photo timestamp.
+        let kinds = service.calls.map { call -> String in
+            switch call {
+            case .list: return "list"
+            case .create: return "create"
+            case .uploadPhoto: return "upload"
+            case .get: return "get"
+            default: return "other"
+            }
+        }
+        XCTAssertEqual(kinds, ["list", "create", "upload", "get"])
+    }
+
+    func testCaptureKeepsTheItemWhenOnlyTheUploadFails() async {
+        let service = FailUploadStub()
+        let viewModel = ItemListViewModel(
+            service: service,
+            authorizer: StubCameraAuthorizer(.granted),
+            clock: { self.fixedDate }
+        )
+
+        await viewModel.createFromPhoto(sampleImage())
+
+        XCTAssertEqual(
+            viewModel.items.count,
+            1,
+            "the created item is kept so the work is not silently lost"
+        )
+        XCTAssertEqual(viewModel.items[0].hasPhoto, false)
+        XCTAssertEqual(
+            viewModel.errorMessage,
+            "The photo exceeds the maximum size of 10 MB.",
+            "the upload failure is reported rather than swallowed"
+        )
+    }
+
+    func testDeniedCameraOpensNoPickerAndCreatesNothing() async {
+        let service = StubInventoryService()
+        let viewModel = ItemListViewModel(
+            service: service,
+            authorizer: StubCameraAuthorizer(.denied)
+        )
+
+        await viewModel.beginCapture()
+
+        XCTAssertNil(viewModel.captureSource)
+        XCTAssertTrue(viewModel.needsCameraSettings)
+        XCTAssertTrue(service.calls.isEmpty)
+    }
+
+    func testMissingCameraFallsBackToTheLibrary() async {
+        let viewModel = ItemListViewModel(
+            service: StubInventoryService(),
+            authorizer: StubCameraAuthorizer(.unavailable)
+        )
+
+        await viewModel.beginCapture()
+
+        XCTAssertEqual(viewModel.captureSource, .photoLibrary)
+        XCTAssertFalse(viewModel.needsCameraSettings)
+    }
+}
+
+/// Creates items successfully but always refuses the photo, to prove the item
+/// survives an upload failure.
+final class FailUploadStub: InventoryService, @unchecked Sendable {
+    private let inner = StubInventoryService()
+
+    func listItems(limit: Int, offset: Int, search: String?) async throws -> Page<Item> {
+        try await inner.listItems(limit: limit, offset: offset, search: search)
+    }
+
+    func item(id: UUID) async throws -> Item {
+        try await inner.item(id: id)
+    }
+
+    func createItem(sku: String, name: String, quantity: Int) async throws -> Item {
+        try await inner.createItem(sku: sku, name: name, quantity: quantity)
+    }
+
+    func updateItem(id: UUID, name: String?, quantity: Int?) async throws -> Item {
+        try await inner.updateItem(id: id, name: name, quantity: quantity)
+    }
+
+    func adjustStock(id: UUID, delta: Int) async throws -> Item {
+        try await inner.adjustStock(id: id, delta: delta)
+    }
+
+    func deleteItem(id: UUID) async throws {
+        try await inner.deleteItem(id: id)
+    }
+
+    func uploadPhoto(id: UUID, jpeg: Data) async throws -> PhotoMetadata {
+        throw APIError.api(
+            status: 413,
+            code: "photo_too_large",
+            message: "The photo exceeds the maximum size of 10 MB."
+        )
+    }
+
+    func photo(id: UUID) async throws -> Data {
+        try await inner.photo(id: id)
+    }
+
+    func deletePhoto(id: UUID) async throws {
+        try await inner.deletePhoto(id: id)
     }
 }
