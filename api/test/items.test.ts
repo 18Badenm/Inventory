@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildApp } from '../src/app.js';
 import { openDatabase } from '../src/db.js';
 import type { Database } from '../src/db.js';
+import { MAX_PHOTO_BYTES } from '../src/items/image.js';
 import type { Item, Page } from '../src/items/model.js';
 
 let db: Database;
@@ -490,6 +491,357 @@ describe('GET /v1/items', () => {
 
     assert.equal(response.statusCode, 400);
     assert.equal(response.json().error.code, 'validation_failed');
+  });
+});
+
+/** Smallest byte sequences that carry each format's magic number. */
+const JPEG_BYTES = Buffer.concat([
+  Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+  Buffer.from('JFIF payload bytes'),
+]);
+const PNG_BYTES = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  Buffer.from('IHDR payload bytes'),
+]);
+/** An ISO-BMFF `ftyp` box with the `heic` brand, as an iPhone camera emits. */
+const HEIC_BYTES = Buffer.concat([
+  Buffer.from([0x00, 0x00, 0x00, 0x18]),
+  Buffer.from('ftypheic'),
+  Buffer.from('mif1heic payload'),
+]);
+
+function storedPhoto(
+  itemId: string,
+): { content_type: string; byte_size: number; bytes: Buffer } | undefined {
+  return db
+    .prepare<
+      { id: string },
+      { content_type: string; byte_size: number; bytes: Buffer }
+    >(
+      'SELECT content_type, byte_size, bytes FROM item_photos WHERE item_id = @id',
+    )
+    .get({ id: itemId });
+}
+
+describe('PUT /v1/items/:id/photo', () => {
+  it('stores the bytes and reports the photo on the item', async () => {
+    const item = await createItem({ sku: 'PH-1', name: 'Thing' });
+    assert.equal(item.photoUpdatedAt, null, 'a new item has no photo');
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+    const metadata = response.json();
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(metadata.itemId, item.id);
+    assert.equal(metadata.contentType, 'image/jpeg');
+    assert.equal(metadata.byteSize, JPEG_BYTES.byteLength);
+
+    const stored = storedPhoto(item.id);
+    assert.equal(stored?.content_type, 'image/jpeg');
+    assert.equal(stored?.byte_size, JPEG_BYTES.byteLength);
+    assert.ok(
+      stored !== undefined && JPEG_BYTES.equals(stored.bytes),
+      'the stored blob is byte-for-byte what was uploaded',
+    );
+
+    // The item now advertises the photo, so no extra request is needed to
+    // discover it.
+    const refetched = await app.inject({
+      method: 'GET',
+      url: `/v1/items/${item.id}`,
+    });
+    assert.equal(refetched.json<Item>().photoUpdatedAt, metadata.updatedAt);
+  });
+
+  it('accepts PNG and HEIC', async () => {
+    const png = await createItem({ sku: 'PH-PNG', name: 'Png' });
+    const heic = await createItem({ sku: 'PH-HEIC', name: 'Heic' });
+
+    const pngResponse = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${png.id}/photo`,
+      headers: { 'content-type': 'image/png' },
+      payload: PNG_BYTES,
+    });
+    const heicResponse = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${heic.id}/photo`,
+      headers: { 'content-type': 'image/heic' },
+      payload: HEIC_BYTES,
+    });
+
+    assert.equal(pngResponse.statusCode, 200);
+    assert.equal(pngResponse.json().contentType, 'image/png');
+    assert.equal(heicResponse.statusCode, 200);
+    assert.equal(heicResponse.json().contentType, 'image/heic');
+  });
+
+  it('replaces an existing photo instead of adding a second', async () => {
+    const item = await createItem({ sku: 'PH-2', name: 'Thing' });
+
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+    const second = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/png' },
+      payload: PNG_BYTES,
+    });
+
+    assert.equal(second.statusCode, 200);
+
+    const count = db
+      .prepare<[], { total: number }>('SELECT COUNT(*) AS total FROM item_photos')
+      .get();
+    assert.equal(count?.total, 1, 'one photo per item');
+
+    const stored = storedPhoto(item.id);
+    assert.equal(stored?.content_type, 'image/png');
+    assert.ok(
+      stored !== undefined && PNG_BYTES.equals(stored.bytes),
+      'the newer bytes won',
+    );
+  });
+
+  it('derives the type from the bytes, not the declared Content-Type', async () => {
+    const item = await createItem({ sku: 'PH-3', name: 'Thing' });
+
+    // Claims JPEG, is actually a PNG.
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: PNG_BYTES,
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(
+      response.json().contentType,
+      'image/png',
+      'the sniffed type is stored, so the bytes cannot be served under a false label',
+    );
+    assert.equal(storedPhoto(item.id)?.content_type, 'image/png');
+  });
+
+  it('rejects a non-image payload with 415 and stores nothing', async () => {
+    const item = await createItem({ sku: 'PH-4', name: 'Thing' });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: Buffer.from('<svg onload="alert(1)"></svg>'),
+    });
+
+    assert.equal(response.statusCode, 415);
+    assert.equal(response.json().error.code, 'unsupported_image_type');
+    assert.equal(storedPhoto(item.id), undefined);
+  });
+
+  it('rejects an unsupported media type with 415', async () => {
+    const item = await createItem({ sku: 'PH-5', name: 'Thing' });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/gif' },
+      payload: Buffer.from('GIF89a'),
+    });
+
+    assert.equal(response.statusCode, 415);
+    assert.equal(response.json().error.code, 'unsupported_image_type');
+    assert.equal(storedPhoto(item.id), undefined);
+  });
+
+  it('rejects an empty body', async () => {
+    const item = await createItem({ sku: 'PH-6', name: 'Thing' });
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: Buffer.alloc(0),
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error.code, 'validation_failed');
+    assert.equal(storedPhoto(item.id), undefined);
+  });
+
+  it('rejects a photo over the size limit with 413', async () => {
+    const item = await createItem({ sku: 'PH-7', name: 'Thing' });
+    const oversized = Buffer.concat([
+      Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+      Buffer.alloc(MAX_PHOTO_BYTES, 0x41),
+    ]);
+
+    const response = await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: oversized,
+    });
+
+    assert.equal(response.statusCode, 413);
+    assert.equal(response.json().error.code, 'photo_too_large');
+    assert.equal(storedPhoto(item.id), undefined);
+  });
+
+  it('returns 404 for an unknown item', async () => {
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/v1/items/3f1870a4-3b1f-4a1e-9a4f-6b0f0d4a1c77/photo',
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, 'item_not_found');
+  });
+});
+
+describe('GET /v1/items/:id/photo', () => {
+  it('serves the exact bytes with the sniffed content type', async () => {
+    const item = await createItem({ sku: 'PG-1', name: 'Thing' });
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/items/${item.id}/photo`,
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.headers['content-type'], 'image/jpeg');
+    assert.ok(
+      JPEG_BYTES.equals(response.rawPayload),
+      'the response body is byte-for-byte the uploaded image',
+    );
+  });
+
+  it('revalidates with an ETag and answers 304 when unchanged', async () => {
+    const item = await createItem({ sku: 'PG-2', name: 'Thing' });
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+
+    const first = await app.inject({
+      method: 'GET',
+      url: `/v1/items/${item.id}/photo`,
+    });
+    const etag = first.headers.etag;
+    assert.ok(typeof etag === 'string' && etag.length > 0);
+
+    const second = await app.inject({
+      method: 'GET',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'if-none-match': etag },
+    });
+
+    assert.equal(second.statusCode, 304);
+    assert.equal(second.rawPayload.byteLength, 0, 'a 304 carries no body');
+  });
+
+  it('returns 404 when the item has no photo', async () => {
+    const item = await createItem({ sku: 'PG-3', name: 'Thing' });
+
+    const response = await app.inject({
+      method: 'GET',
+      url: `/v1/items/${item.id}/photo`,
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, 'photo_not_found');
+  });
+
+  it('distinguishes a missing item from a missing photo', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/items/3f1870a4-3b1f-4a1e-9a4f-6b0f0d4a1c77/photo',
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, 'item_not_found');
+  });
+});
+
+describe('DELETE /v1/items/:id/photo', () => {
+  it('removes the photo but keeps the item', async () => {
+    const item = await createItem({ sku: 'PD-1', name: 'Thing', quantity: 4 });
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/v1/items/${item.id}/photo`,
+    });
+
+    assert.equal(response.statusCode, 204);
+    assert.equal(storedPhoto(item.id), undefined);
+    assert.equal(storedRow(item.id)?.quantity, 4, 'the item survived');
+
+    const refetched = await app.inject({
+      method: 'GET',
+      url: `/v1/items/${item.id}`,
+    });
+    assert.equal(refetched.json<Item>().photoUpdatedAt, null);
+  });
+
+  it('returns 404 when there is no photo to delete', async () => {
+    const item = await createItem({ sku: 'PD-2', name: 'Thing' });
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/v1/items/${item.id}/photo`,
+    });
+
+    assert.equal(response.statusCode, 404);
+    assert.equal(response.json().error.code, 'photo_not_found');
+  });
+});
+
+describe('deleting an item', () => {
+  it('cascades to its photo, leaving no orphaned blob', async () => {
+    const item = await createItem({ sku: 'CA-1', name: 'Thing' });
+    await app.inject({
+      method: 'PUT',
+      url: `/v1/items/${item.id}/photo`,
+      headers: { 'content-type': 'image/jpeg' },
+      payload: JPEG_BYTES,
+    });
+    assert.notEqual(storedPhoto(item.id), undefined);
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/v1/items/${item.id}`,
+    });
+
+    assert.equal(response.statusCode, 204);
+    assert.equal(
+      storedPhoto(item.id),
+      undefined,
+      'ON DELETE CASCADE removed the blob with its row',
+    );
   });
 });
 

@@ -131,9 +131,16 @@ struct ItemRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(item.name)
                     .font(.body)
-                Text(item.sku)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text(item.sku)
+                        .font(.caption.monospaced())
+                    if item.hasPhoto {
+                        Image(systemName: "camera.fill")
+                            .font(.caption2)
+                            .accessibilityLabel("Has a photo")
+                    }
+                }
+                .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 8)

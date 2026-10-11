@@ -9,12 +9,18 @@ struct ItemDetailView: View {
     @State private var errorMessage: String?
     @State private var adjustmentSize = 1
 
+    @StateObject private var photo: ItemPhotoViewModel
+    @State private var isCapturing = false
+
     private let service: InventoryService
     private let onChange: (Item) -> Void
 
     init(item: Item, service: InventoryService, onChange: @escaping (Item) -> Void) {
         _item = State(initialValue: item)
         _name = State(initialValue: item.name)
+        _photo = StateObject(
+            wrappedValue: ItemPhotoViewModel(itemId: item.id, service: service)
+        )
         self.service = service
         self.onChange = onChange
     }
@@ -71,6 +77,10 @@ struct ItemDetailView: View {
                 .buttonStyle(.bordered)
             }
 
+            Section("Photo") {
+                photoSection
+            }
+
             Section("History") {
                 LabeledContent("Created", value: item.createdAt.formatted(date: .abbreviated, time: .shortened))
                 LabeledContent("Updated", value: item.updatedAt.formatted(date: .abbreviated, time: .shortened))
@@ -80,8 +90,26 @@ struct ItemDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .disabled(isSaving)
         .overlay {
-            if isSaving {
+            if isSaving || photo.isUploading {
                 ProgressView()
+            }
+        }
+        .task { await photo.load(hasPhoto: item.hasPhoto) }
+        .sheet(isPresented: $isCapturing) {
+            CameraPicker { captured in
+                Task {
+                    if let updated = await photo.upload(captured) {
+                        apply(updated)
+                    }
+                }
+            }
+        }
+        // Funnelled into this screen's single alert so a photo failure and a
+        // rename failure cannot fight over presentation.
+        .onChange(of: photo.errorMessage) { _, message in
+            if let message {
+                errorMessage = message
+                photo.errorMessage = nil
             }
         }
         .alert(
@@ -95,6 +123,53 @@ struct ItemDetailView: View {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: { message in
             Text(message)
+        }
+    }
+
+    @ViewBuilder
+    private var photoSection: some View {
+        if let image = photo.image {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .frame(maxHeight: 240)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .accessibilityLabel("Photo of \(item.name)")
+        } else if photo.isLoading {
+            HStack {
+                Spacer()
+                ProgressView()
+                Spacer()
+            }
+        }
+
+        Button {
+            isCapturing = true
+        } label: {
+            Label(
+                photo.image == nil ? "Take photo" : "Retake photo",
+                systemImage: "camera"
+            )
+        }
+        .disabled(photo.isBusy)
+
+        if photo.image != nil {
+            Button(role: .destructive) {
+                Task {
+                    if let updated = await photo.delete() {
+                        apply(updated)
+                    }
+                }
+            } label: {
+                Label("Remove photo", systemImage: "trash")
+            }
+            .disabled(photo.isBusy)
+        }
+
+        if !CameraPicker.isCameraAvailable {
+            Text("No camera on this device — the photo library is used instead.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 

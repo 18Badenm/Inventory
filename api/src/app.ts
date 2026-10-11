@@ -2,7 +2,13 @@ import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
 import type { Config } from './config.js';
 import type { Database } from './db.js';
-import { AppError, ValidationError } from './errors.js';
+import {
+  AppError,
+  PhotoTooLargeError,
+  UnsupportedImageTypeError,
+  ValidationError,
+} from './errors.js';
+import { MAX_PHOTO_BYTES, SUPPORTED_IMAGE_TYPES } from './items/image.js';
 import { ItemRepository } from './items/repository.js';
 import { registerItemRoutes } from './items/routes.js';
 
@@ -50,6 +56,16 @@ export function buildApp(options: AppOptions): FastifyInstance {
     bodyLimit: 64 * 1024,
   });
 
+  // Photos arrive as raw image bodies. Registered with their own, much higher
+  // bodyLimit so the small global limit still applies to every JSON endpoint.
+  app.addContentTypeParser(
+    [...SUPPORTED_IMAGE_TYPES],
+    { parseAs: 'buffer', bodyLimit: MAX_PHOTO_BYTES },
+    (_request, body, done) => {
+      done(null, body);
+    },
+  );
+
   const repository = new ItemRepository(options.db);
 
   app.get('/health', (_request, reply) =>
@@ -87,6 +103,29 @@ export function buildApp(options: AppOptions): FastifyInstance {
         error: { code: error.code, message: error.message },
       };
       return reply.code(error.statusCode).send(body);
+    }
+
+    // Fastify rejects an oversized or wrongly-typed payload before any handler
+    // runs, so translate those two into the same typed errors a handler would
+    // have raised rather than reporting them as a generic bad request.
+    const fastifyCode = (error as { code?: unknown }).code;
+
+    if (fastifyCode === 'FST_ERR_CTP_BODY_TOO_LARGE') {
+      request.log.info('photo rejected: too large');
+      const tooLarge = new PhotoTooLargeError(MAX_PHOTO_BYTES);
+      const body: ErrorBody = {
+        error: { code: tooLarge.code, message: tooLarge.message },
+      };
+      return reply.code(tooLarge.statusCode).send(body);
+    }
+
+    if (fastifyCode === 'FST_ERR_CTP_INVALID_MEDIA_TYPE') {
+      request.log.info('photo rejected: unsupported media type');
+      const unsupported = new UnsupportedImageTypeError(SUPPORTED_IMAGE_TYPES);
+      const body: ErrorBody = {
+        error: { code: unsupported.code, message: unsupported.message },
+      };
+      return reply.code(unsupported.statusCode).send(body);
     }
 
     // A malformed body or unsupported content type is the client's mistake;

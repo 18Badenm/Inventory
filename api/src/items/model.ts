@@ -8,6 +8,25 @@ export interface Item {
   readonly quantity: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /**
+   * When the item's photo was last replaced, or `null` when it has none. The
+   * client uses this both to know whether a photo exists and as a cache key,
+   * so a replaced photo is re-fetched rather than served from a stale cache.
+   */
+  readonly photoUpdatedAt: string | null;
+}
+
+/** A stored photo's metadata, without the bytes. */
+export interface PhotoMetadata {
+  readonly itemId: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly updatedAt: string;
+}
+
+/** A stored photo together with its bytes. */
+export interface Photo extends PhotoMetadata {
+  readonly bytes: Buffer;
 }
 
 export interface Page<T> {

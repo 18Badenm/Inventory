@@ -21,6 +21,18 @@ CREATE TABLE IF NOT EXISTS items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_items_created_at ON items (created_at DESC, id DESC);
+
+-- One photo per item, replaced on re-upload. Stored as a BLOB rather than a
+-- file on disk: the image lives and dies with its row (ON DELETE CASCADE), so
+-- there are no orphaned files to reap and no filename to sanitise.
+CREATE TABLE IF NOT EXISTS item_photos (
+  item_id      TEXT    PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
+  content_type TEXT    NOT NULL,
+  byte_size    INTEGER NOT NULL CHECK (byte_size > 0),
+  bytes        BLOB    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  updated_at   TEXT    NOT NULL
+);
 `;
 
 export function openDatabase(path: string): Database {

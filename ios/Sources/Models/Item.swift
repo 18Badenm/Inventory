@@ -8,6 +8,19 @@ struct Item: Identifiable, Hashable, Sendable, Codable {
     let quantity: Int
     let createdAt: Date
     let updatedAt: Date
+    /// When the photo was last replaced, or `nil` when the item has none.
+    /// Doubles as a cache key: a new value means the image must be re-fetched.
+    let photoUpdatedAt: Date?
+
+    var hasPhoto: Bool { photoUpdatedAt != nil }
+}
+
+/// Metadata the API returns after a photo upload.
+struct PhotoMetadata: Decodable, Sendable, Equatable {
+    let itemId: UUID
+    let contentType: String
+    let byteSize: Int
+    let updatedAt: Date
 }
 
 /// A page of results. The API always reports the unpaginated `total`, which

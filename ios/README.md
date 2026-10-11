@@ -50,10 +50,26 @@ defaulting to another host.
 
 - **List** — searchable, paged, pull-to-refresh; `+`/`−` adjust stock inline,
   swipe to delete. Zero-stock counts are shown in orange.
-- **Detail** — rename, set an absolute count, or move stock by a chosen step.
+- **Detail** — rename, set an absolute count, move stock by a chosen step, and
+  take/retake/remove the item's photo.
 - **Add** — SKU/name/quantity, validated locally against the same rules the
   API enforces, so Save is only enabled for input the server will accept. A
   duplicate SKU can only be caught server-side and arrives as an alert.
+
+## Camera
+
+`CameraPicker` wraps `UIImagePickerController`: the requirement is one still
+photo, and the system picker brings the capture UI, the permission prompt and
+the retake step with it.
+
+**The simulator has no camera**, so when capture is unavailable the picker falls
+back to the photo library and the detail screen says so — otherwise the button
+would be dead exactly where most testing happens. `NSCameraUsageDescription` and
+`NSPhotoLibraryUsageDescription` are set in `project.yml`.
+
+Captures are re-drawn (baking in EXIF orientation, so photos are never shown
+rotated), scaled to 2048 px on the longest side, and JPEG-encoded at 0.8 before
+upload — a full-resolution iPhone capture is several times the API's 10 MB cap.
 
 ## Tests
 

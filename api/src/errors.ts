@@ -12,6 +12,9 @@ export type ErrorCode =
   | 'item_not_found'
   | 'sku_already_exists'
   | 'insufficient_stock'
+  | 'photo_not_found'
+  | 'unsupported_image_type'
+  | 'photo_too_large'
   | 'internal_error';
 
 export interface FieldIssue {
@@ -55,6 +58,39 @@ export class SkuAlreadyExistsError extends AppError {
 
   constructor(sku: string) {
     super(`An item with SKU "${sku}" already exists.`);
+  }
+}
+
+export class PhotoNotFoundError extends AppError {
+  readonly code = 'photo_not_found';
+  readonly statusCode = 404;
+
+  constructor(itemId: string) {
+    super(`Item "${itemId}" has no photo.`);
+  }
+}
+
+export class UnsupportedImageTypeError extends AppError {
+  readonly code = 'unsupported_image_type';
+  readonly statusCode = 415;
+
+  constructor(accepted: readonly string[]) {
+    super(
+      `The uploaded bytes are not a supported image. Accepted: ${accepted.join(', ')}.`,
+    );
+  }
+}
+
+export class PhotoTooLargeError extends AppError {
+  readonly code = 'photo_too_large';
+  readonly statusCode = 413;
+  readonly maxBytes: number;
+
+  constructor(maxBytes: number) {
+    super(
+      `The photo exceeds the maximum size of ${Math.floor(maxBytes / (1024 * 1024))} MB.`,
+    );
+    this.maxBytes = maxBytes;
   }
 }
 

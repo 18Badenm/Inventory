@@ -3,14 +3,18 @@ import type { Database } from '../db.js';
 import {
   InsufficientStockError,
   ItemNotFoundError,
+  PhotoNotFoundError,
   SkuAlreadyExistsError,
 } from '../errors.js';
+import type { SupportedImageType } from './image.js';
 import type {
   AdjustStockInput,
   CreateItemInput,
   Item,
   ListQuery,
   Page,
+  Photo,
+  PhotoMetadata,
   UpdateItemInput,
 } from './model.js';
 
@@ -22,7 +26,17 @@ interface ItemRow {
   readonly quantity: number;
   readonly created_at: string;
   readonly updated_at: string;
+  readonly photo_updated_at: string | null;
 }
+
+/**
+ * Shared projection. Every read of an item reports whether it has a photo, so
+ * the client never needs a second request to find out.
+ */
+const ITEM_COLUMNS = `i.id, i.sku, i.name, i.quantity, i.created_at, i.updated_at,
+         p.updated_at AS photo_updated_at`;
+
+const ITEM_SOURCE = `items i LEFT JOIN item_photos p ON p.item_id = i.id`;
 
 function toItem(row: ItemRow): Item {
   return {
@@ -32,6 +46,7 @@ function toItem(row: ItemRow): Item {
     quantity: row.quantity,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    photoUpdatedAt: row.photo_updated_at,
   };
 }
 
@@ -75,24 +90,24 @@ export class ItemRepository {
     const where =
       pattern === null
         ? ''
-        : `WHERE sku LIKE @pattern ESCAPE '\\' OR name LIKE @pattern ESCAPE '\\'`;
+        : `WHERE i.sku LIKE @pattern ESCAPE '\\' OR i.name LIKE @pattern ESCAPE '\\'`;
 
     const rows = this.#db
       .prepare<
         { pattern: string | null; limit: number; offset: number },
         ItemRow
       >(
-        `SELECT id, sku, name, quantity, created_at, updated_at
-           FROM items
+        `SELECT ${ITEM_COLUMNS}
+           FROM ${ITEM_SOURCE}
            ${where}
-          ORDER BY created_at DESC, id DESC
+          ORDER BY i.created_at DESC, i.id DESC
           LIMIT @limit OFFSET @offset`,
       )
       .all({ pattern, limit, offset });
 
     const counted = this.#db
       .prepare<{ pattern: string | null }, { total: number }>(
-        `SELECT COUNT(*) AS total FROM items ${where}`,
+        `SELECT COUNT(*) AS total FROM items i ${where}`,
       )
       .get({ pattern });
 
@@ -125,15 +140,33 @@ export class ItemRepository {
       quantity: input.quantity,
       created_at: timestamp,
       updated_at: timestamp,
+      // A new item has no photo yet; the column is only ever set by setPhoto.
+      photo_updated_at: null,
     };
 
     try {
       this.#db
-        .prepare<ItemRow>(
+        .prepare<{
+          id: string;
+          sku: string;
+          name: string;
+          quantity: number;
+          created_at: string;
+          updated_at: string;
+        }>(
           `INSERT INTO items (id, sku, name, quantity, created_at, updated_at)
            VALUES (@id, @sku, @name, @quantity, @created_at, @updated_at)`,
         )
-        .run(row);
+        // Bound explicitly rather than spreading the row: the driver rejects
+        // named parameters the statement does not use.
+        .run({
+          id: row.id,
+          sku: row.sku,
+          name: row.name,
+          quantity: row.quantity,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+        });
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new SkuAlreadyExistsError(input.sku);
@@ -223,6 +256,128 @@ export class ItemRepository {
     return apply.immediate();
   }
 
+  /**
+   * Stores or replaces the item's photo and returns its metadata. The item's
+   * own `updated_at` is deliberately left alone: attaching a photo does not
+   * change the stock record.
+   *
+   * @throws {ItemNotFoundError}
+   */
+  setPhoto(
+    itemId: string,
+    bytes: Buffer,
+    contentType: SupportedImageType,
+  ): PhotoMetadata {
+    const apply = this.#db.transaction((): PhotoMetadata => {
+      if (this.#findById(itemId) === undefined) {
+        throw new ItemNotFoundError(itemId);
+      }
+
+      const timestamp = this.#now();
+
+      // The upsert keeps created_at from the first upload so it records when
+      // the item first got a photo, not when it was last replaced.
+      this.#db
+        .prepare<{
+          item_id: string;
+          content_type: string;
+          byte_size: number;
+          bytes: Buffer;
+          created_at: string;
+          updated_at: string;
+        }>(
+          `INSERT INTO item_photos
+             (item_id, content_type, byte_size, bytes, created_at, updated_at)
+           VALUES
+             (@item_id, @content_type, @byte_size, @bytes, @created_at, @updated_at)
+           ON CONFLICT (item_id) DO UPDATE SET
+             content_type = excluded.content_type,
+             byte_size    = excluded.byte_size,
+             bytes        = excluded.bytes,
+             updated_at   = excluded.updated_at`,
+        )
+        .run({
+          item_id: itemId,
+          content_type: contentType,
+          byte_size: bytes.byteLength,
+          bytes,
+          created_at: timestamp,
+          updated_at: timestamp,
+        });
+
+      return {
+        itemId,
+        contentType,
+        byteSize: bytes.byteLength,
+        updatedAt: timestamp,
+      };
+    });
+
+    return apply.immediate();
+  }
+
+  /**
+   * @throws {ItemNotFoundError} when the item itself does not exist.
+   * @throws {PhotoNotFoundError} when the item exists but has no photo.
+   */
+  getPhoto(itemId: string): Photo {
+    if (this.#findById(itemId) === undefined) {
+      throw new ItemNotFoundError(itemId);
+    }
+
+    const row = this.#db
+      .prepare<
+        { item_id: string },
+        {
+          content_type: string;
+          byte_size: number;
+          bytes: Buffer;
+          updated_at: string;
+        }
+      >(
+        `SELECT content_type, byte_size, bytes, updated_at
+           FROM item_photos
+          WHERE item_id = @item_id`,
+      )
+      .get({ item_id: itemId });
+
+    if (row === undefined) {
+      throw new PhotoNotFoundError(itemId);
+    }
+
+    return {
+      itemId,
+      contentType: row.content_type,
+      byteSize: row.byte_size,
+      bytes: row.bytes,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  /**
+   * @throws {ItemNotFoundError}
+   * @throws {PhotoNotFoundError}
+   */
+  deletePhoto(itemId: string): void {
+    const apply = this.#db.transaction((): void => {
+      if (this.#findById(itemId) === undefined) {
+        throw new ItemNotFoundError(itemId);
+      }
+
+      const result = this.#db
+        .prepare<{ item_id: string }>(
+          'DELETE FROM item_photos WHERE item_id = @item_id',
+        )
+        .run({ item_id: itemId });
+
+      if (result.changes === 0) {
+        throw new PhotoNotFoundError(itemId);
+      }
+    });
+
+    apply.immediate();
+  }
+
   /** @throws {ItemNotFoundError} */
   delete(id: string): void {
     const result = this.#db
@@ -237,9 +392,9 @@ export class ItemRepository {
   #findById(id: string): ItemRow | undefined {
     return this.#db
       .prepare<{ id: string }, ItemRow>(
-        `SELECT id, sku, name, quantity, created_at, updated_at
-           FROM items
-          WHERE id = @id`,
+        `SELECT ${ITEM_COLUMNS}
+           FROM ${ITEM_SOURCE}
+          WHERE i.id = @id`,
       )
       .get({ id });
   }

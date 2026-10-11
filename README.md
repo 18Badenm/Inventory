@@ -52,7 +52,10 @@ on), a `name`, and a non-negative `quantity`.
 | `GET`    | `/v1/items/:id`         |                                                        |
 | `PATCH`  | `/v1/items/:id`         | `{name?, quantity?}` — absolute set; SKU is immutable  |
 | `POST`   | `/v1/items/:id/adjust`  | `{delta}` — atomic relative stock movement             |
-| `DELETE` | `/v1/items/:id`         | `204`                                                  |
+| `DELETE` | `/v1/items/:id`         | `204` — cascades to the photo                          |
+| `PUT`    | `/v1/items/:id/photo`   | raw image body → metadata; replaces any existing photo |
+| `GET`    | `/v1/items/:id/photo`   | the image bytes, with `ETag`/`304` revalidation        |
+| `DELETE` | `/v1/items/:id/photo`   | `204`                                                  |
 
 `PATCH` **sets** a count; `adjust` **moves** it. The second is what the app's
 `+`/`−` buttons use: it is applied under the write lock, so two concurrent
@@ -72,8 +75,10 @@ Every non-2xx response has one shape, so a client codes against one contract:
 | Status | Code                                      |
 | ------ | ----------------------------------------- |
 | 400    | `validation_failed`, `bad_request`         |
-| 404    | `item_not_found`, `route_not_found`        |
+| 404    | `item_not_found`, `route_not_found`, `photo_not_found` |
 | 409    | `sku_already_exists`                       |
+| 413    | `photo_too_large`                          |
+| 415    | `unsupported_image_type`                   |
 | 422    | `insufficient_stock`                       |
 | 500    | `internal_error`                           |
 
@@ -105,10 +110,24 @@ with no network and no running backend.
 **No optimistic UI for stock.** An adjustment the server would refuse must not
 briefly display a wrong count, so the server's copy of the row always wins.
 
+**Photos: one per item, sniffed not trusted.** The camera lives on an item's
+detail screen, so a photo always belongs to the item it depicts. The image is
+sent as a raw `image/*` body — one file, no fields, so multipart would buy
+nothing — and the stored media type comes from the file's **magic bytes**, never
+the client's `Content-Type` header. A payload claiming `image/jpeg` that is
+really an SVG is rejected with `415`, which is what stops it being served back
+later under an image label. Accepted: JPEG, PNG, HEIC, up to 10 MB.
+
+Bytes live in a SQLite BLOB with `ON DELETE CASCADE`, so a photo dies with its
+item: no orphaned files to reap and no client-supplied filename to sanitise.
+The iOS client re-draws each capture to bake in EXIF orientation and scales it
+to 2048 px before JPEG encoding — a full-resolution iPhone capture is several
+times the size limit.
+
 ## Testing
 
 ```bash
-cd api && npm test          # 28 tests
+cd api && npm test          # 44 tests
 cd ios  && xcodebuild test -scheme InventoryApp \
             -destination 'platform=iOS Simulator,name=iPhone 15'
 ```

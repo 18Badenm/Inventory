@@ -38,6 +38,10 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         # Read at runtime by APIConfiguration.
         InventoryApiBaseUrl: $(INVENTORY_API_BASE_URL)
+        NSCameraUsageDescription: Take photos of inventory items so you can identify them at a glance.
+        # Only reached on a device with no camera, such as the simulator,
+        # where CameraPicker falls back to the library.
+        NSPhotoLibraryUsageDescription: Choose a photo of an inventory item when no camera is available.
         # The simulator talks to the API over plaintext http on localhost.
         # Scoped to localhost only — not a blanket ATS exemption. A real
         # deployment uses https and needs none of this.

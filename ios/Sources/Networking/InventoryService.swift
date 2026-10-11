@@ -12,4 +12,16 @@ protocol InventoryService: Sendable {
     func updateItem(id: UUID, name: String?, quantity: Int?) async throws -> Item
     func adjustStock(id: UUID, delta: Int) async throws -> Item
     func deleteItem(id: UUID) async throws
+
+    /// Uploads (or replaces) the item's photo.
+    ///
+    /// - Parameter jpeg: JPEG-encoded bytes. The API sniffs the format from the
+    ///   bytes, so a mislabelled payload is rejected rather than trusted.
+    func uploadPhoto(id: UUID, jpeg: Data) async throws -> PhotoMetadata
+
+    /// Fetches the item's photo bytes, or throws `.api(status: 404, ...)` when
+    /// it has none.
+    func photo(id: UUID) async throws -> Data
+
+    func deletePhoto(id: UUID) async throws
 }

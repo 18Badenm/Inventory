@@ -145,6 +145,41 @@ actor InventoryClient: InventoryService {
         )
     }
 
+    func uploadPhoto(id: UUID, jpeg: Data) async throws -> PhotoMetadata {
+        let data = try await performRaw(
+            method: "PUT",
+            path: "/v1/items/\(id.apiIdentifier)/photo",
+            contentType: "image/jpeg",
+            payload: jpeg
+        )
+
+        do {
+            return try decoder.decode(PhotoMetadata.self, from: data)
+        } catch {
+            throw APIError.decoding(message: String(describing: error))
+        }
+    }
+
+    func photo(id: UUID) async throws -> Data {
+        // Returned verbatim: these are image bytes, not JSON, so nothing is
+        // decoded.
+        try await perform(
+            method: "GET",
+            path: "/v1/items/\(id.apiIdentifier)/photo",
+            query: [],
+            body: Optional<NoBody>.none
+        )
+    }
+
+    func deletePhoto(id: UUID) async throws {
+        _ = try await perform(
+            method: "DELETE",
+            path: "/v1/items/\(id.apiIdentifier)/photo",
+            query: [],
+            body: Optional<NoBody>.none
+        )
+    }
+
     // MARK: - Transport
 
     private func send<Body: Encodable, Response: Decodable>(
@@ -163,14 +198,51 @@ actor InventoryClient: InventoryService {
         }
     }
 
-    /// Builds, sends, and validates one request. Returns the raw body so a
-    /// 204 caller can ignore it.
+    /// Builds, sends, and validates one JSON request. Returns the raw body so
+    /// a 204 caller can ignore it.
     private func perform<Body: Encodable>(
         method: String,
         path: String,
         query: [URLQueryItem],
         body: Body?
     ) async throws -> Data {
+        var request = try makeRequest(method: method, path: path, query: query)
+
+        if let body {
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            do {
+                request.httpBody = try encoder.encode(body)
+            } catch {
+                // An un-encodable request body is a programming error here,
+                // not a runtime condition to retry.
+                throw APIError.decoding(message: String(describing: error))
+            }
+        }
+
+        return try await execute(request)
+    }
+
+    /// Sends a raw payload (an image) under its own media type. The API takes
+    /// the photo as a plain image body, not multipart, so there is no boundary
+    /// framing to build here.
+    private func performRaw(
+        method: String,
+        path: String,
+        contentType: String,
+        payload: Data
+    ) async throws -> Data {
+        var request = try makeRequest(method: method, path: path, query: [])
+        request.setValue(contentType, forHTTPHeaderField: "Content-Type")
+        request.httpBody = payload
+
+        return try await execute(request)
+    }
+
+    private func makeRequest(
+        method: String,
+        path: String,
+        query: [URLQueryItem]
+    ) throws -> URLRequest {
         guard var components = URLComponents(
             url: baseURL.appendingPathComponent(path),
             resolvingAgainstBaseURL: false
@@ -190,17 +262,11 @@ actor InventoryClient: InventoryService {
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
-        if let body {
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            do {
-                request.httpBody = try encoder.encode(body)
-            } catch {
-                // An un-encodable request body is a programming error here,
-                // not a runtime condition to retry.
-                throw APIError.decoding(message: String(describing: error))
-            }
-        }
+        return request
+    }
 
+    /// Sends a prepared request and maps the outcome onto `APIError`.
+    private func execute(_ request: URLRequest) async throws -> Data {
         let data: Data
         let response: URLResponse
 

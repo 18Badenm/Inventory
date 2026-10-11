@@ -12,16 +12,30 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
         case update(id: UUID, name: String?, quantity: Int?)
         case adjust(id: UUID, delta: Int)
         case delete(UUID)
+        case uploadPhoto(id: UUID, byteCount: Int)
+        case photo(UUID)
+        case deletePhoto(UUID)
     }
 
     private let lock = NSLock()
     private var _calls: [Call] = []
     private var _items: [Item]
     private var _failure: APIError?
+    private var _photos: [UUID: Data] = [:]
 
     init(items: [Item] = [], failure: APIError? = nil) {
         _items = items
         _failure = failure
+    }
+
+    /// Seeds a photo without going through `uploadPhoto`, so a test can set up
+    /// an item that already has one.
+    func seedPhoto(_ data: Data, for itemId: UUID) {
+        lock.withLock { _photos[itemId] = data }
+    }
+
+    func storedPhoto(for itemId: UUID) -> Data? {
+        lock.withLock { _photos[itemId] }
     }
 
     var calls: [Call] {
@@ -82,7 +96,8 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
                 name: name,
                 quantity: quantity,
                 createdAt: Date(timeIntervalSince1970: 0),
-                updatedAt: Date(timeIntervalSince1970: 0)
+                updatedAt: Date(timeIntervalSince1970: 0),
+                photoUpdatedAt: nil
             )
             _items.insert(item, at: 0)
             return item
@@ -103,7 +118,8 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
                 name: name ?? existing.name,
                 quantity: quantity ?? existing.quantity,
                 createdAt: existing.createdAt,
-                updatedAt: Date(timeIntervalSince1970: 60)
+                updatedAt: Date(timeIntervalSince1970: 60),
+                photoUpdatedAt: existing.photoUpdatedAt
             )
             _items[index] = updated
             return updated
@@ -134,7 +150,8 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
                 name: existing.name,
                 quantity: quantity,
                 createdAt: existing.createdAt,
-                updatedAt: Date(timeIntervalSince1970: 60)
+                updatedAt: Date(timeIntervalSince1970: 60),
+                photoUpdatedAt: existing.photoUpdatedAt
             )
             _items[index] = updated
             return updated
@@ -149,6 +166,83 @@ final class StubInventoryService: InventoryService, @unchecked Sendable {
                 throw APIError.api(status: 404, code: "item_not_found", message: "Not found")
             }
             _items.remove(at: index)
+            // Mirrors the API's ON DELETE CASCADE.
+            _photos.removeValue(forKey: id)
+        }
+    }
+
+    func uploadPhoto(id: UUID, jpeg: Data) async throws -> PhotoMetadata {
+        try record(.uploadPhoto(id: id, byteCount: jpeg.count))
+
+        return try lock.withLock {
+            guard let index = _items.firstIndex(where: { $0.id == id }) else {
+                throw APIError.api(status: 404, code: "item_not_found", message: "Not found")
+            }
+
+            _photos[id] = jpeg
+
+            let stamp = Date(timeIntervalSince1970: 120)
+            let existing = _items[index]
+            _items[index] = Item(
+                id: existing.id,
+                sku: existing.sku,
+                name: existing.name,
+                quantity: existing.quantity,
+                createdAt: existing.createdAt,
+                updatedAt: existing.updatedAt,
+                photoUpdatedAt: stamp
+            )
+
+            return PhotoMetadata(
+                itemId: id,
+                contentType: "image/jpeg",
+                byteSize: jpeg.count,
+                updatedAt: stamp
+            )
+        }
+    }
+
+    func photo(id: UUID) async throws -> Data {
+        try record(.photo(id))
+
+        return try lock.withLock {
+            guard let data = _photos[id] else {
+                throw APIError.api(
+                    status: 404,
+                    code: "photo_not_found",
+                    message: "Item has no photo"
+                )
+            }
+            return data
+        }
+    }
+
+    func deletePhoto(id: UUID) async throws {
+        try record(.deletePhoto(id))
+
+        try lock.withLock {
+            guard let index = _items.firstIndex(where: { $0.id == id }) else {
+                throw APIError.api(status: 404, code: "item_not_found", message: "Not found")
+            }
+
+            guard _photos.removeValue(forKey: id) != nil else {
+                throw APIError.api(
+                    status: 404,
+                    code: "photo_not_found",
+                    message: "Item has no photo"
+                )
+            }
+
+            let existing = _items[index]
+            _items[index] = Item(
+                id: existing.id,
+                sku: existing.sku,
+                name: existing.name,
+                quantity: existing.quantity,
+                createdAt: existing.createdAt,
+                updatedAt: existing.updatedAt,
+                photoUpdatedAt: nil
+            )
         }
     }
 }
@@ -159,7 +253,8 @@ extension Item {
         id: UUID = UUID(),
         sku: String = "SKU-1",
         name: String = "Widget",
-        quantity: Int = 5
+        quantity: Int = 5,
+        photoUpdatedAt: Date? = nil
     ) -> Item {
         Item(
             id: id,
@@ -167,7 +262,8 @@ extension Item {
             name: name,
             quantity: quantity,
             createdAt: Date(timeIntervalSince1970: 0),
-            updatedAt: Date(timeIntervalSince1970: 0)
+            updatedAt: Date(timeIntervalSince1970: 0),
+            photoUpdatedAt: photoUpdatedAt
         )
     }
 }
