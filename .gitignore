@@ -20,3 +20,6 @@ xcuserdata/
 *.xcuserstate
 .DS_Store
 build/
+
+# Git bundles (transient; regenerate with `git bundle create`)
+*.bundle
