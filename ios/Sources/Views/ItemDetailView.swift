@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Detail screen: rename, set an absolute count, or move stock by a chosen
 /// amount. Every mutation round-trips and the server's copy wins.
@@ -10,7 +11,6 @@ struct ItemDetailView: View {
     @State private var adjustmentSize = 1
 
     @StateObject private var photo: ItemPhotoViewModel
-    @State private var isCapturing = false
 
     private let service: InventoryService
     private let onChange: (Item) -> Void
@@ -95,14 +95,29 @@ struct ItemDetailView: View {
             }
         }
         .task { await photo.load(hasPhoto: item.hasPhoto) }
-        .sheet(isPresented: $isCapturing) {
-            CameraPicker { captured in
+        .sheet(item: $photo.captureSource) { source in
+            CameraPicker(source: source) { captured in
                 Task {
                     if let updated = await photo.upload(captured) {
                         apply(updated)
                     }
                 }
             }
+        }
+        // Access can only be restored in Settings: iOS shows its permission
+        // prompt once per install, so asking again would do nothing.
+        .alert("Camera access needed", isPresented: $photo.needsCameraSettings) {
+            Button("Open Settings") {
+                if let url = URL(string: UIApplication.openSettingsURLString) {
+                    UIApplication.shared.open(url)
+                }
+            }
+            Button("Not now", role: .cancel) {}
+        } message: {
+            Text(
+                "Allow camera access for Inventory to photograph this item. "
+                    + "You can change it under Settings › Inventory › Camera."
+            )
         }
         // Funnelled into this screen's single alert so a photo failure and a
         // rename failure cannot fight over presentation.
@@ -144,7 +159,7 @@ struct ItemDetailView: View {
         }
 
         Button {
-            isCapturing = true
+            Task { await photo.beginCapture() }
         } label: {
             Label(
                 photo.image == nil ? "Take photo" : "Retake photo",

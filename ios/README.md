@@ -62,10 +62,26 @@ defaulting to another host.
 photo, and the system picker brings the capture UI, the permission prompt and
 the retake step with it.
 
-**The simulator has no camera**, so when capture is unavailable the picker falls
-back to the photo library and the detail screen says so — otherwise the button
-would be dead exactly where most testing happens. `NSCameraUsageDescription` and
+**Permission is resolved before the picker is presented.**
+`UIImagePickerController` does not refuse a camera the user has denied — it
+presents a **black screen** — so `SystemCameraAuthorizer` checks
+`AVCaptureDevice.authorizationStatus(for: .video)` first and the view model
+decides what to show:
+
+| Access | What happens |
+| ------ | ------------ |
+| `.notDetermined` | the system prompt is shown (iOS allows this once per install) |
+| `.authorized` | the camera opens |
+| `.denied` / `.restricted` | an alert with **Open Settings**, since only Settings can undo it |
+| no camera hardware | falls back to the photo library |
+
+**The simulator has no camera**, which is why the last row exists — otherwise
+the button would be dead exactly where most testing happens, and the detail
+screen says as much. `NSCameraUsageDescription` and
 `NSPhotoLibraryUsageDescription` are set in `project.yml`.
+
+`CameraAuthorizing` is a protocol, so `CameraPermissionGateTests` drives every
+branch above with a stub — no device and no real prompt.
 
 Captures are re-drawn (baking in EXIF orientation, so photos are never shown
 rotated), scaled to 2048 px on the longest side, and JPEG-encoded at 0.8 before

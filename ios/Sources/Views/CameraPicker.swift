@@ -1,16 +1,34 @@
 import SwiftUI
 import UIKit
 
-/// Presents the system camera and hands back a single still image.
+/// Where a capture comes from. Chosen by the view model *after* camera access
+/// is resolved, so the picker is never presented into a denied camera.
+enum CaptureSource: String, Identifiable, Sendable {
+    case camera
+    case photoLibrary
+
+    var id: String { rawValue }
+
+    var pickerSourceType: UIImagePickerController.SourceType {
+        switch self {
+        case .camera: return .camera
+        case .photoLibrary: return .photoLibrary
+        }
+    }
+}
+
+/// Presents the system camera (or the library) and hands back one still image.
 ///
 /// `UIImagePickerController` rather than a custom `AVCaptureSession`: the
-/// requirement is one photo, and the system picker brings the capture UI,
-/// the permission prompt and the retake step with it.
+/// requirement is one photo, and the system picker brings the capture UI and
+/// the retake step with it.
 ///
-/// The iOS **simulator has no camera**, so when capture is unavailable this
-/// falls back to the photo library — otherwise the screen would be dead on a
-/// simulator, which is where most of this gets exercised.
+/// It does **not** decide whether the camera is usable — permission is
+/// resolved before this is presented, because the picker does not refuse a
+/// denied camera, it just shows a black screen.
 struct CameraPicker: UIViewControllerRepresentable {
+    /// Where to capture from.
+    let source: CaptureSource
     /// Called with the captured image; the picker dismisses itself first.
     let onCapture: (UIImage) -> Void
 
@@ -22,7 +40,7 @@ struct CameraPicker: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIImagePickerController {
         let controller = UIImagePickerController()
-        controller.sourceType = Self.isCameraAvailable ? .camera : .photoLibrary
+        controller.sourceType = source.pickerSourceType
         controller.allowsEditing = false
         controller.delegate = context.coordinator
         return controller

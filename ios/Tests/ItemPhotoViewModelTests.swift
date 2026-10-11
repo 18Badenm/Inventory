@@ -2,6 +2,80 @@ import UIKit
 import XCTest
 @testable import InventoryApp
 
+/// Camera authorizer whose verdict the test chooses, so the permission gate
+/// can be exercised without a device or a real permission prompt.
+@MainActor
+final class StubCameraAuthorizer: CameraAuthorizing {
+    private let verdict: CameraAccess
+    private(set) var requestCount = 0
+
+    init(_ verdict: CameraAccess) {
+        self.verdict = verdict
+    }
+
+    func requestAccess() async -> CameraAccess {
+        requestCount += 1
+        return verdict
+    }
+}
+
+@MainActor
+final class CameraPermissionGateTests: XCTestCase {
+    private func makeViewModel(
+        access: CameraAccess
+    ) -> (ItemPhotoViewModel, StubCameraAuthorizer, StubInventoryService) {
+        let item = Item.fixture()
+        let service = StubInventoryService(items: [item])
+        let authorizer = StubCameraAuthorizer(access)
+        let viewModel = ItemPhotoViewModel(
+            itemId: item.id,
+            service: service,
+            authorizer: authorizer
+        )
+        return (viewModel, authorizer, service)
+    }
+
+    func testGrantedAccessOpensTheCamera() async {
+        let (viewModel, authorizer, _) = makeViewModel(access: .granted)
+
+        await viewModel.beginCapture()
+
+        XCTAssertEqual(viewModel.captureSource, .camera)
+        XCTAssertFalse(viewModel.needsCameraSettings)
+        XCTAssertEqual(authorizer.requestCount, 1)
+    }
+
+    func testDeniedAccessPromptsForSettingsAndOpensNoPicker() async {
+        let (viewModel, _, _) = makeViewModel(access: .denied)
+
+        await viewModel.beginCapture()
+
+        XCTAssertNil(
+            viewModel.captureSource,
+            "a denied camera must not present a picker, which would show a black screen"
+        )
+        XCTAssertTrue(viewModel.needsCameraSettings)
+    }
+
+    func testNoCameraHardwareFallsBackToTheLibrary() async {
+        let (viewModel, _, _) = makeViewModel(access: .unavailable)
+
+        await viewModel.beginCapture()
+
+        XCTAssertEqual(
+            viewModel.captureSource,
+            .photoLibrary,
+            "the simulator has no camera, so the library is the only source"
+        )
+        XCTAssertFalse(viewModel.needsCameraSettings)
+    }
+
+    func testCaptureSourceMapsOntoThePickerSourceType() {
+        XCTAssertEqual(CaptureSource.camera.pickerSourceType, .camera)
+        XCTAssertEqual(CaptureSource.photoLibrary.pickerSourceType, .photoLibrary)
+    }
+}
+
 @MainActor
 final class ItemPhotoViewModelTests: XCTestCase {
     /// A real 4x4 image, so encoding and decoding exercise actual image code
