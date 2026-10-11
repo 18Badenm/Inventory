@@ -16,9 +16,10 @@ struct ItemListView: View {
     var body: some View {
         NavigationStack {
             content
+                .overlay(alignment: .bottomTrailing) { captureButton }
                 .navigationTitle("Inventory")
                 .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             Task { await viewModel.beginCapture() }
                         } label: {
@@ -26,7 +27,7 @@ struct ItemListView: View {
                         }
                         .disabled(viewModel.isCapturing)
                     }
-                    ToolbarItem(placement: .primaryAction) {
+                    ToolbarItem(placement: .topBarTrailing) {
                         Button {
                             isAddingItem = true
                         } label: {
@@ -85,6 +86,25 @@ struct ItemListView: View {
         }
     }
 
+    /// The app's primary action, sized and placed so it cannot be mistaken for
+    /// a toolbar glyph.
+    private var captureButton: some View {
+        Button {
+            Task { await viewModel.beginCapture() }
+        } label: {
+            Image(systemName: "camera.fill")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 68, height: 68)
+                .background(Circle().fill(Color.accentColor))
+                .shadow(color: .black.opacity(0.25), radius: 8, y: 4)
+        }
+        .disabled(viewModel.isCapturing)
+        .padding(.trailing, 24)
+        .padding(.bottom, 32)
+        .accessibilityLabel("Take photo of a new item")
+    }
+
     @ViewBuilder
     private var content: some View {
         if viewModel.isLoading && viewModel.items.isEmpty {
@@ -105,7 +125,7 @@ struct ItemListView: View {
                 .font(.headline)
             Text(
                 viewModel.searchText.isEmpty
-                    ? "Tap the camera to photograph an item, or + to type one in."
+                    ? "Tap the camera button to photograph your first item."
                     : "Try a different SKU or name."
             )
             .foregroundStyle(.secondary)
