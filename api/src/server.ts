@@ -1,6 +1,28 @@
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
+import type { Config } from './config.js';
 import { openDatabase } from './db.js';
+import { GeminiValuator } from './valuation/gemini.js';
+import type { ItemValuator } from './valuation/gemini.js';
+
+/**
+ * Builds the valuation backend, or `null` when no key is configured — in which
+ * case every other route still serves and the valuation endpoint reports that
+ * it is unconfigured.
+ */
+function buildValuator(config: Config): ItemValuator | null {
+  if (config.GEMINI_API_KEY === undefined) {
+    return null;
+  }
+
+  return new GeminiValuator({
+    apiKey: config.GEMINI_API_KEY,
+    model: config.GEMINI_MODEL,
+    timeoutMs: config.GEMINI_TIMEOUT_MS,
+    currency: config.VALUATION_CURRENCY,
+    grounding: config.VALUATION_GROUNDING === 'on',
+  });
+}
 
 /**
  * Process entry point: load config, open storage, serve, and shut down
@@ -9,7 +31,14 @@ import { openDatabase } from './db.js';
 async function main(): Promise<void> {
   const config = loadConfig();
   const db = openDatabase(config.DATABASE_PATH);
-  const app = buildApp({ db, logLevel: config.LOG_LEVEL });
+  const valuator = buildValuator(config);
+  const app = buildApp({ db, logLevel: config.LOG_LEVEL, valuator });
+
+  if (valuator === null) {
+    app.log.warn(
+      'GEMINI_API_KEY is not set — POST /v1/items/:id/valuation will report valuation_not_configured',
+    );
+  }
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info({ signal }, 'shutting down');

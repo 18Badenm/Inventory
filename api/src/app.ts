@@ -7,14 +7,23 @@ import {
   PhotoTooLargeError,
   UnsupportedImageTypeError,
   ValidationError,
+  ValuationUnreadableError,
+  ValuationUpstreamError,
 } from './errors.js';
 import { MAX_PHOTO_BYTES, SUPPORTED_IMAGE_TYPES } from './items/image.js';
 import { ItemRepository } from './items/repository.js';
 import { registerItemRoutes } from './items/routes.js';
+import type { ItemValuator } from './valuation/gemini.js';
 
 export interface AppOptions {
   readonly db: Database;
   readonly logLevel: Config['LOG_LEVEL'];
+  /**
+   * Valuation backend, or `null` when no API key is configured. Explicitly
+   * part of the options so the absence is a deliberate wiring decision rather
+   * than a module-level lookup that silently finds nothing.
+   */
+  readonly valuator?: ItemValuator | null;
 }
 
 /**
@@ -34,6 +43,23 @@ interface ErrorBody {
  * content type, body too large). Returns undefined for anything else, which
  * is then treated as a server-side bug.
  */
+/**
+ * Operator-facing log context for a typed error. The diagnostic fields on the
+ * valuation errors exist precisely so the cause is recoverable from the logs
+ * while the client still gets only the generic message.
+ */
+function operatorContext(error: AppError): Record<string, unknown> {
+  if (error instanceof ValuationUnreadableError) {
+    return { code: error.code, detail: error.detail };
+  }
+
+  if (error instanceof ValuationUpstreamError) {
+    return { code: error.code, upstreamStatus: error.upstreamStatus };
+  }
+
+  return { code: error.code };
+}
+
 function clientErrorStatus(error: unknown): number | undefined {
   if (typeof error !== 'object' || error === null) {
     return undefined;
@@ -72,7 +98,7 @@ export function buildApp(options: AppOptions): FastifyInstance {
     reply.code(200).send({ status: 'ok' }),
   );
 
-  registerItemRoutes(app, repository);
+  registerItemRoutes(app, repository, options.valuator ?? null);
 
   app.setNotFoundHandler((request, reply) => {
     const body: ErrorBody = {
@@ -98,7 +124,15 @@ export function buildApp(options: AppOptions): FastifyInstance {
     }
 
     if (error instanceof AppError) {
-      request.log.info({ code: error.code }, error.message);
+      const context = operatorContext(error);
+
+      // A 5xx is an operator's problem, not a routine client mistake.
+      if (error.statusCode >= 500) {
+        request.log.warn(context, error.message);
+      } else {
+        request.log.info(context, error.message);
+      }
+
       const body: ErrorBody = {
         error: { code: error.code, message: error.message },
       };

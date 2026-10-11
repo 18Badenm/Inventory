@@ -13,7 +13,7 @@ A stock-tracking app in two parts:
 # 1. Backend
 cd api
 npm install
-npm test          # 28 integration tests, no server or network needed
+npm test          # 88 tests; no server, network or API key needed
 npm run dev       # http://localhost:3000
 
 # 2. iOS app (needs macOS + Xcode)
@@ -56,10 +56,36 @@ on), a `name`, and a non-negative `quantity`.
 | `PUT`    | `/v1/items/:id/photo`   | raw image body → metadata; replaces any existing photo |
 | `GET`    | `/v1/items/:id/photo`   | the image bytes, with `ETag`/`304` revalidation        |
 | `DELETE` | `/v1/items/:id/photo`   | `204`                                                  |
+| `POST`   | `/v1/items/:id/valuation` | identifies the item from its photo and prices it     |
 
 `PATCH` **sets** a count; `adjust` **moves** it. The second is what the app's
 `+`/`−` buttons use: it is applied under the write lock, so two concurrent
 adjustments cannot read the same starting quantity and overwrite each other.
+
+### Valuation
+
+`POST /v1/items/:id/valuation` answers two questions about the item's stored
+photo — what the product is, and what it is worth:
+
+```jsonc
+{ "name": "WD-40 Multi-Use Product Smart Straw 11 oz",
+  "price": { "amount": 7.28, "currency": "USD" },
+  "sources": [{ "uri": "https://...", "title": "A Listing" }] }
+```
+
+`price` is `null` when the product was identified but no price could be
+established — an unbranded object, or a photo of a wall. That is a real
+outcome, reported as one rather than filled in with a guess. `sources` is
+populated only when grounding is on, and is always empty otherwise.
+
+A `POST` rather than a `GET` because it is neither cacheable nor free: each
+call spends an upstream request against a billed quota. **Nothing is
+persisted** — the valuation reflects the market at the moment of the call, so
+storing it would mean later serving a stale price as though it were current.
+
+Requires `GEMINI_API_KEY`. Without it the service still boots and serves every
+other route, and this endpoint reports `503 valuation_not_configured` instead
+of pretending to work. See `api/.env.example` for the full set of knobs.
 
 ### Errors
 
@@ -81,6 +107,9 @@ Every non-2xx response has one shape, so a client codes against one contract:
 | 415    | `unsupported_image_type`                   |
 | 422    | `insufficient_stock`                       |
 | 500    | `internal_error`                           |
+| 502    | `valuation_upstream_failed`, `valuation_unreadable` |
+| 503    | `valuation_not_configured`                 |
+| 504    | `valuation_timeout`                        |
 
 Taking stock below zero is **rejected, not clamped** — a clamped count
 silently loses the discrepancy an operator needs to see. Unexpected errors are
@@ -120,6 +149,38 @@ the client's `Content-Type` header. A payload claiming `image/jpeg` that is
 really an SVG is rejected with `415`, which is what stops it being served back
 later under an image label. Accepted: JPEG, PNG, HEIC, up to 10 MB.
 
+**Valuation: Gemini, because nothing else returns a price.** No Google API
+returns a market price for an arbitrary photographed product. Cloud Vision's
+`WEB_DETECTION` returns `bestGuessLabels` and matching pages but no price;
+Vision Product Search matches against a catalog you upload, with prices you
+already supply; the Content API for Shopping manages your own merchant
+listings. Gemini's `generateContent` is the one surface that answers both
+halves from one photo, and with `tools: [{googleSearch: {}}]` it backs the
+price with live listings and returns their URLs — which is what makes a
+valuation auditable rather than a number with no provenance.
+
+Search grounding is a **billed** feature. On a key without that quota every
+grounded call fails with a hard 429 (not a rate limit — it never succeeds), so
+`VALUATION_GROUNDING=off` trades the citations for an unsourced estimate and
+switches on strict JSON mode, which grounding cannot use. Both paths are
+parsed by the same Zod schema, so the contract does not depend on the mode.
+
+A model's free-form text is not trusted. The reply must parse as one JSON
+object with a non-empty name and either `null` or a positive amount in the
+configured currency; anything else is a `valuation_unreadable` 502 rather than
+a repaired or guessed price. A price quoted in another currency is rejected,
+not converted at an invented rate. Grounding URIs are re-parsed and must be
+`https:` before being echoed to a client, so a `javascript:` or `data:` URI
+cannot reach the app as a "source". The photo itself is attacker-controlled
+input, so the prompt states that text visible in it describes the product and
+is never an instruction — and the output contract is what actually contains
+the damage if a photo tries anyway.
+
+`GEMINI_TIMEOUT_MS` bounds the **whole** call including the one retry, not each
+attempt: a caller who asks to wait 20 seconds must not wait 41. Retries are
+limited to one, on 429 and 503, which are the two transient upstream failures
+this service actually sees.
+
 Bytes live in a SQLite BLOB with `ON DELETE CASCADE`, so a photo dies with its
 item: no orphaned files to reap and no client-supplied filename to sanitise.
 The iOS client re-draws each capture to bake in EXIF orientation and scales it
@@ -129,7 +190,7 @@ times the size limit.
 ## Testing
 
 ```bash
-cd api && npm test          # 44 tests
+cd api && npm test          # 88 tests
 cd ios  && xcodebuild test -scheme InventoryApp \
             -destination 'platform=iOS Simulator,name=iPhone 15'
 ```

@@ -15,6 +15,10 @@ export type ErrorCode =
   | 'photo_not_found'
   | 'unsupported_image_type'
   | 'photo_too_large'
+  | 'valuation_not_configured'
+  | 'valuation_upstream_failed'
+  | 'valuation_unreadable'
+  | 'valuation_timeout'
   | 'internal_error';
 
 export interface FieldIssue {
@@ -91,6 +95,65 @@ export class PhotoTooLargeError extends AppError {
       `The photo exceeds the maximum size of ${Math.floor(maxBytes / (1024 * 1024))} MB.`,
     );
     this.maxBytes = maxBytes;
+  }
+}
+
+/**
+ * Valuation is an optional capability: the service runs without a Gemini key
+ * and says so plainly on this one endpoint, rather than booting into a state
+ * where the route exists but silently answers with nothing useful.
+ */
+export class ValuationNotConfiguredError extends AppError {
+  readonly code = 'valuation_not_configured';
+  readonly statusCode = 503;
+
+  constructor() {
+    super('Item valuation is not configured on this server.');
+  }
+}
+
+/**
+ * The upstream model API refused or failed. The upstream status is recorded for
+ * operators; neither its response body nor the API key is ever carried in the
+ * message, because this message is shown to a client.
+ */
+export class ValuationUpstreamError extends AppError {
+  readonly code = 'valuation_upstream_failed';
+  readonly statusCode = 502;
+  readonly upstreamStatus: number | null;
+
+  constructor(upstreamStatus: number | null) {
+    super('The valuation service is unavailable. Please try again later.');
+    this.upstreamStatus = upstreamStatus;
+  }
+}
+
+/**
+ * The upstream answered, but not with a valuation this service can stand
+ * behind — malformed JSON, a missing field, a currency we did not ask for, or
+ * a truncated or safety-blocked completion. Reported rather than repaired: a
+ * guessed price is worse than no price.
+ */
+export class ValuationUnreadableError extends AppError {
+  readonly code = 'valuation_unreadable';
+  readonly statusCode = 502;
+  /** Operator-facing detail. Logged, never sent to the client. */
+  readonly detail: string;
+
+  constructor(detail: string) {
+    super('The valuation service returned no usable answer.');
+    this.detail = detail;
+  }
+}
+
+export class ValuationTimeoutError extends AppError {
+  readonly code = 'valuation_timeout';
+  readonly statusCode = 504;
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`The valuation service did not respond within ${timeoutMs} ms.`);
+    this.timeoutMs = timeoutMs;
   }
 }
 

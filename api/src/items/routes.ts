@@ -4,7 +4,9 @@ import {
   PhotoTooLargeError,
   UnsupportedImageTypeError,
   ValidationError,
+  ValuationNotConfiguredError,
 } from '../errors.js';
+import type { ItemValuator } from '../valuation/gemini.js';
 import {
   detectImageType,
   MAX_PHOTO_BYTES,
@@ -50,6 +52,7 @@ interface IdParams {
 export function registerItemRoutes(
   app: FastifyInstance,
   repository: ItemRepository,
+  valuator: ItemValuator | null,
 ): void {
   app.get(
     '/v1/items',
@@ -177,6 +180,34 @@ export function registerItemRoutes(
       const id = parse(itemIdSchema, request.params.id);
       repository.deletePhoto(id);
       return reply.code(204).send();
+    },
+  );
+
+  /**
+   * Values the item from its stored photo: what the product is, and what it is
+   * worth. A POST rather than a GET because it is neither cacheable nor free —
+   * each call spends an upstream request against a billed quota.
+   *
+   * Nothing is persisted. The valuation is derived from the photo and the
+   * market at the moment of the call, so storing it would mean serving a
+   * stale price as though it were current.
+   */
+  app.post(
+    '/v1/items/:id/valuation',
+    async (
+      request: FastifyRequest<{ Params: IdParams }>,
+      reply: FastifyReply,
+    ): Promise<FastifyReply> => {
+      if (valuator === null) {
+        throw new ValuationNotConfiguredError();
+      }
+
+      const id = parse(itemIdSchema, request.params.id);
+      // Raises item_not_found or photo_not_found for us: an item with no photo
+      // is nothing to identify, and that is already a settled contract.
+      const photo = repository.getPhoto(id);
+
+      return reply.code(200).send(await valuator.valuate(photo));
     },
   );
 
