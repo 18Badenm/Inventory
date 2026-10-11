@@ -46,6 +46,12 @@ targets:
         # Scoped to localhost only — not a blanket ATS exemption. A real
         # deployment uses https and needs none of this.
         NSAppTransportSecurity:
+          # Permits plaintext http to local-network addresses, which is what a
+          # real device needs to reach an API running on your Mac
+          # (INVENTORY_API_BASE_URL=http://192.168.x.x:3000). Scoped to the
+          # local network — it is not a blanket exemption, and a deployed API
+          # uses https and needs none of this.
+          NSAllowsLocalNetworking: true
           NSExceptionDomains:
             localhost:
               NSExceptionAllowsInsecureHTTPLoads: true
